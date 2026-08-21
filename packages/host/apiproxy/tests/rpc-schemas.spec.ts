@@ -10,6 +10,7 @@ import {
   sessionCreateValueSchema, sessionEventSchema, sessionHistoryRequestSchema, sessionHistoryValueSchema,
   sessionIdSchema, sessionListRequestSchema, sessionListValueSchema, sessionModelsRequestSchema,
   sessionModelsValueSchema, sessionPromptRequestSchema, sessionPromptValueSchema,
+  sessionForkRequestSchema,
   sessionSearchRequestSchema, sessionSearchValueSchema, sessionSelectModelRequestSchema,
   sessionSelectModelValueSchema, sessionSummarySchema,
   sessionUpdateQueueRequestSchema, sessionUpdateQueueValueSchema,
@@ -27,6 +28,7 @@ import {
   workspaceInsertSessionBeforeRequestSchema, workspaceInsertSessionBeforeValueSchema,
   workspaceListRequestSchema, workspaceListValueSchema,
   workspaceRenameRequestSchema, workspaceRenameValueSchema, workspaceViewSchema,
+  workspaceUnarchiveSessionRequestSchema, workspaceUnarchiveSessionValueSchema,
 } from '../src/api/workspace.schema.ts'
 import { skillEntrySchema, skillListRequestSchema, skillListValueSchema } from '../src/api/skills.schema.ts'
 import {
@@ -196,6 +198,9 @@ describe('sessions domain schemas', () => {
     expect(sessionCreateRequestSchema.parse({ workspaceId: 'w1', sessionId: 's1' }).sessionId).toBe('s1')
     expect(() => sessionCreateRequestSchema.parse({ workspaceId: 'w1', cwd: '/w' })).toThrow(/not both/)
     expect(sessionCreateValueSchema.parse({ sessionId: 's1' }).sessionId).toBe('s1')
+    expect(sessionForkRequestSchema.parse({ sessionId: 's1', beforeSeq: 3 }).beforeSeq).toBe(3)
+    expect(() => sessionForkRequestSchema.parse({ sessionId: 's1', atSeq: 2, beforeSeq: 3 }))
+      .toThrow(/mutually exclusive/)
     expect(sessionHistoryRequestSchema.parse({ sessionId: 's1', beforeSeq: 3, maxMessages: 5 }).beforeSeq).toBe(3)
     expect(() => sessionHistoryRequestSchema.parse({ sessionId: 's1', maxMessages: 0 })).toThrow()
     expect(sessionHistoryValueSchema.parse({
@@ -360,12 +365,17 @@ describe('workspace domain schemas', () => {
     expect(() => workspaceListValueSchema.parse({ items: [view] })).toThrow()
   })
 
-  it('archiveSession request/value carry the id and the full updated set', () => {
+  it('archiveSession and unarchiveSession carry the id and full updated set', () => {
     expect(workspaceArchiveSessionRequestSchema.parse({ sessionId: 's1' }).sessionId).toBe('s1')
     expect(() => workspaceArchiveSessionRequestSchema.parse({})).toThrow()
     expect(workspaceArchiveSessionValueSchema.parse({ archivedSessionIds: ['s1', 's2'] }).archivedSessionIds)
       .toEqual(['s1', 's2'])
     expect(() => workspaceArchiveSessionValueSchema.parse({ archivedSessionIds: 's1' })).toThrow()
+    expect(workspaceUnarchiveSessionRequestSchema.parse({ sessionId: 's1' }).sessionId).toBe('s1')
+    expect(() => workspaceUnarchiveSessionRequestSchema.parse({})).toThrow()
+    expect(workspaceUnarchiveSessionValueSchema.parse({ archivedSessionIds: ['s2'] }).archivedSessionIds)
+      .toEqual(['s2'])
+    expect(() => workspaceUnarchiveSessionValueSchema.parse({ archivedSessionIds: 's1' })).toThrow()
   })
 
   it('insertSessionBefore accepts an anchored and an anchorless move', () => {

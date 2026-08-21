@@ -2309,7 +2309,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         return ok(request, { title: normalized, seq: appended.seq })
       },
       fork: (request) => {
-        const { sessionId, atSeq } = request.payload
+        const { sessionId, atSeq, beforeSeq } = request.payload
         const source = summaryOf(sessionId)
         if (source === undefined) {
           return err(request, {
@@ -2320,24 +2320,36 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         const log = logs.get(sessionId) ?? []
         const lastSeq = log.at(-1)?.seq ?? -1
-        const anchoredBoundary = atSeq === undefined
-          ? undefined
-          : log.find(e => e.type === 'turn/end' && e.seq >= atSeq)
-        const boundary = anchoredBoundary
-          ?? (atSeq === undefined || atSeq > lastSeq
-            ? log.findLast(e => e.type === 'turn/end')
-            : undefined)
-        if (boundary === undefined) {
-          return err(request, {
-            code: 'fork-unavailable',
-            message: atSeq !== undefined && atSeq <= lastSeq
-              ? `session ${sessionId} has not completed the turn containing event ${String(atSeq)}`
-              : `session ${sessionId} has no completed turn`,
-            details: { sessionId },
-          })
+        let cut: number
+        if (beforeSeq !== undefined) {
+          if (log[beforeSeq]?.type !== 'turn/start') {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: `session ${sessionId} event ${String(beforeSeq)} is not a turn start`,
+              details: { sessionId },
+            })
+          }
+          cut = beforeSeq
+        } else {
+          const anchoredBoundary = atSeq === undefined
+            ? undefined
+            : log.find(e => e.type === 'turn/end' && e.seq >= atSeq)
+          const boundary = anchoredBoundary
+            ?? (atSeq === undefined || atSeq > lastSeq
+              ? log.findLast(e => e.type === 'turn/end')
+              : undefined)
+          if (boundary === undefined) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: atSeq !== undefined && atSeq <= lastSeq
+                ? `session ${sessionId} has not completed the turn containing event ${String(atSeq)}`
+                : `session ${sessionId} has no completed turn`,
+              details: { sessionId },
+            })
+          }
+          cut = boundary.seq + 1
+          while (cut < log.length && log[cut]?.type !== 'turn/start') cut++
         }
-        let cut = boundary.seq + 1
-        while (cut < log.length && log[cut]?.type !== 'turn/start') cut++
         const child: SessionSummary = {
           sessionId: sid(`fx-${nextSession++}`), updatedAt: Date.now(), running: false, blank: false,
           parentSessionId: sessionId,
@@ -2690,6 +2702,15 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         const { sessionId } = request.payload
         if (!archivedSessionIds.includes(sessionId)) {
           archivedSessionIds.push(sessionId)
+          emitHost({ type: 'host/archived-sessions-changed', archivedSessionIds: [...archivedSessionIds] })
+        }
+        return ok(request, { archivedSessionIds: [...archivedSessionIds] })
+      },
+      unarchiveSession: (request) => {
+        const { sessionId } = request.payload
+        const index = archivedSessionIds.indexOf(sessionId)
+        if (index !== -1) {
+          archivedSessionIds.splice(index, 1)
           emitHost({ type: 'host/archived-sessions-changed', archivedSessionIds: [...archivedSessionIds] })
         }
         return ok(request, { archivedSessionIds: [...archivedSessionIds] })
@@ -3105,6 +3126,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'workspace.insertBefore': return this.api.workspace.insertBefore(request)
       case 'workspace.insertSessionBefore': return this.api.workspace.insertSessionBefore(request)
       case 'workspace.archiveSession': return this.api.workspace.archiveSession(request)
+      case 'workspace.unarchiveSession': return this.api.workspace.unarchiveSession(request)
       case 'skill.list': return this.api.skills.list(request)
       case 'agentPreset.list': return this.api.agentPresets.list(request)
       case 'agentPreset.select': return this.api.agentPresets.select(request)

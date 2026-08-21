@@ -63,8 +63,22 @@ function rawResultText(block: ToolCallBlock): string {
   return parts.join('\n')
 }
 
-export function DetailsPanel({ useSession, useSessions, sessionId, useStore, renderSlot, closeDetails, t }: DetailsPanelProps) {
+export function DetailsPanel({
+  useSession,
+  useSessions,
+  sessionId,
+  useStore,
+  renderSlot,
+  closeDetails,
+  usePinnedDetails,
+  useDetailsPage,
+  showPinnedDetails,
+  showToolDetails,
+  t,
+}: DetailsPanelProps) {
   const selection = useStore(s => s.selection)
+  const pinned = usePinnedDetails(value => value)
+  const requestedPage = useDetailsPage(value => value.page)
   // Session workspace root: an omitted or relative terminal cwd resolves
   // against it, which the pure presenter cannot see.
   const sessionCwd = useSessions(list => list.byId[sessionId]?.cwd)
@@ -75,15 +89,15 @@ export function DetailsPanel({ useSession, useSessions, sessionId, useStore, ren
     s => (callId === undefined ? null : materialFor(s, callId)),
     (a, b) => shallowEqual(a, b))
 
-  return (
-    <div className={css.root}>
+  const toolDrawer = (
+    <>
       <div className={css.header}>
         <div className={css.title}>
           {selection === null ? t('details.title') : material?.name ?? selection.toolName ?? t('details.title')}
         </div>
         <button
           type="button" className={css.close} aria-label={t('details.close')}
-          onClick={() => { closeDetails() }}
+          onClick={closeDetails}
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -123,6 +137,31 @@ export function DetailsPanel({ useSession, useSessions, sessionId, useStore, ren
                 </section>
               </>
             )}
+      </div>
+    </>
+  )
+
+  const activePage = pinned ? requestedPage : 'tool'
+
+  return (
+    <div className={css.root} data-pinned={pinned || undefined}>
+      {pinned && (
+        <div className={css.pageTabs} role="tablist" aria-label="Details pages">
+          <button
+            type="button" role="tab" aria-selected={activePage === 'pinned'}
+            onClick={showPinnedDetails}
+          >Context Map</button>
+          <button
+            type="button" role="tab" aria-selected={activePage === 'tool'}
+            onClick={showToolDetails}
+          >{t('details.title')}</button>
+        </div>
+      )}
+      {activePage === 'pinned' && (
+        <div className={css.pinned}>{renderSlot('conversation.details.pinned', {})}</div>
+      )}
+      <div className={css.drawer} hidden={activePage !== 'tool'}>
+        {renderSlot('conversation.details.inspector', {}, { fallback: toolDrawer })}
       </div>
     </div>
   )

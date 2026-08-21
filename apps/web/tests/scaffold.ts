@@ -186,6 +186,12 @@ export interface WebScaffold {
 /** Options for {@link launchWebScaffold}. */
 export interface LaunchOptions {
   /**
+   * Deterministic keyless Context Map review provider. Supplying this disables
+   * the ordinary replay route only for Fast review requests while exercising
+   * the real Contextify service, RPC, UI review, plan mutation, and compiler seams.
+   */
+  contextRecommendation?: (prompt: string) => unknown
+  /**
    * Optional product overlay applied after the shipped Web surface and before
    * the scaffold's hermetic test patches, matching the launcher's `--patch`
    * ordering.
@@ -566,6 +572,23 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         new RouteOnlyAdapter(replayProviders(options.replayContextWindow)),
       ), 'web e2e scaffold: route-only adapter')
     }
+    if (options.contextRecommendation !== undefined) {
+      const recommend = options.contextRecommendation
+      ctx.on('llm/stream', (request, next): AsyncIterable<StreamChunk> => {
+        const prompt = request.messages.flatMap(message => message.source.kind === 'plugin'
+          && message.source.plugin === 'contextify'
+          ? message.content.flatMap(block => block.type === 'text' ? [block.text] : [])
+          : []).join('\n')
+        if (!prompt.includes('Conversation graph JSON:\n')) return next()
+        const text = JSON.stringify(recommend(prompt))
+        return (async function* (): AsyncIterable<StreamChunk> {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      }, { global: true, prepend: true })
+    }
   } catch (error) {
     if (process.cwd() !== originalCwd) process.chdir(originalCwd)
     const cleanupFailures = await cleanupScaffoldWorld(ctx, workspaceCwd, persistenceRoot)
@@ -794,6 +817,11 @@ function normalizeAria(snapshot: string, workspaceCwd: string): string {
     .split(workspaceCwd).join('{{cwd}}')
     .split(base).join('{{workspace}}')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '{{uuid}}')
+    // Loopback fixture servers bind an ephemeral port. Context Map controls
+    // expose message source text through their accessible names, so URLs that
+    // were previously hidden from aria snapshots now need the same stability
+    // treatment as clocks, UUIDs, and throughput.
+    .replace(/((?:https?:\/\/)?(?:127\.0\.0\.1|localhost)):\d+/gi, '$1:{{port}}')
     // The optional space in `\d+m ?\d+s` covers both minute spellings: the
     // stats line's compact `2m42s` and the message-chrome template's `2m 42s`.
     .replace(

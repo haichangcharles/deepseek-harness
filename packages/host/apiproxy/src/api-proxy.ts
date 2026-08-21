@@ -124,7 +124,7 @@ const DEFAULT_MAX_MESSAGES = 50
  * is deferred work.
  */
 const WEB_SETTINGS_NAMESPACES = [
-  'agent-loop', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'web-search-deepseek',
+  'agent-loop', 'contextify', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'web-search-deepseek',
 ] as const
 
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
@@ -2361,7 +2361,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async fork(request) {
-        const { sessionId, atSeq } = request.payload
+        const { sessionId, atSeq, beforeSeq } = request.payload
         let source: SessionReadState
         try {
           source = await readSessionState(sessionId)
@@ -2376,32 +2376,44 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const events = source.events
-        // An in-log anchor belongs to the turn containing it and must never
-        // clip backward to an earlier completed turn. Omitted and past-end
-        // anchors retain the last-completed-turn shortcut.
-        const lastSeq = events.at(-1)?.seq ?? -1
-        const anchoredBoundary = atSeq === undefined
-          ? undefined
-          : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
-        const boundary = anchoredBoundary
-          ?? (atSeq === undefined || atSeq > lastSeq
-            ? events.findLast(e => e.type === 'turn/end')
-            : undefined)
-        if (boundary === undefined) {
-          return err(request, {
-            code: 'fork-unavailable',
-            message: atSeq !== undefined && atSeq <= lastSeq
-              ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
-              : `session "${sessionId}" has no completed turn to fork from`,
-            details: { sessionId },
-          })
+        let cut: number
+        if (beforeSeq !== undefined) {
+          if (events[beforeSeq]?.type !== 'turn/start') {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: `session "${sessionId}" event ${String(beforeSeq)} is not a turn start`,
+              details: { sessionId },
+            })
+          }
+          cut = beforeSeq
+        } else {
+          // An in-log anchor belongs to the turn containing it and must never
+          // clip backward to an earlier completed turn. Omitted and past-end
+          // anchors retain the last-completed-turn shortcut.
+          const lastSeq = events.at(-1)?.seq ?? -1
+          const anchoredBoundary = atSeq === undefined
+            ? undefined
+            : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
+          const boundary = anchoredBoundary
+            ?? (atSeq === undefined || atSeq > lastSeq
+              ? events.findLast(e => e.type === 'turn/end')
+              : undefined)
+          if (boundary === undefined) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: atSeq !== undefined && atSeq <= lastSeq
+                ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
+                : `session "${sessionId}" has no completed turn to fork from`,
+              details: { sessionId },
+            })
+          }
+          // Extend the cut through trailing out-of-band appends (session/title,
+          // injections) up to the next turn/start: they are standalone events, so
+          // the seed stays balanced, and the child inherits a title generated
+          // right after the boundary turn.
+          cut = boundary.seq + 1
+          while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         }
-        // Extend the cut through trailing out-of-band appends (session/title,
-        // injections) up to the next turn/start: they are standalone events, so
-        // the seed stays balanced, and the child inherits a title generated
-        // right after the boundary turn.
-        let cut = boundary.seq + 1
-        while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         let workspace: Workspace | undefined
         try {
           workspace = await forkWorkspace(source)
@@ -2906,6 +2918,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { sessionId } = request.payload
         try {
           await ctx.workspaceRegistry.archiveSession(sessionId)
+        } catch (error: unknown) {
+          // Only the registry's unknown-session rejection is the business
+          // code; storage/durability failures propagate as internal errors.
+          if (!(error instanceof WorkspaceUnknownSessionError)) throw error
+          return err(request, {
+            code: 'session-not-found',
+            message: error.message,
+            details: { sessionId },
+          })
+        }
+        return ok(request, { archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds] })
+      },
+
+      async unarchiveSession(request) {
+        const { sessionId } = request.payload
+        try {
+          await ctx.workspaceRegistry.unarchiveSession(sessionId)
         } catch (error: unknown) {
           // Only the registry's unknown-session rejection is the business
           // code; storage/durability failures propagate as internal errors.

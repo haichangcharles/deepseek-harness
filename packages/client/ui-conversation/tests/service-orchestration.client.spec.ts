@@ -11,6 +11,8 @@ import type { QueuedMessage, SessionFace } from '@deepseek-ai/dsh-client-runtime
 import { ComposerBlockRegistry } from '../src/client/input/blocks.ts'
 import { InputHub } from '../src/client/input/hub.ts'
 import { ConversationController, UnsupportedImageMediaTypeError } from '../src/client/service.ts'
+import { MessageRevealRegistry } from '../src/client/chat/message-reveal.ts'
+import { DetailsNavigation } from '../src/client/details-navigation.ts'
 import { zh } from '../src/client/locales.ts'
 
 async function bench(readAttachment?: SessionFace['readAttachment']) {
@@ -26,18 +28,44 @@ async function bench(readAttachment?: SessionFace['readAttachment']) {
   // config.input is required (the apply shares its hub with the inject
   // factories); the bench passes its own instance explicitly.
   const hub = new InputHub(runtime.ctx, makeTranslate(zh, {}))
+  const messageReveal = new MessageRevealRegistry()
+  const detailsNavigation = new DetailsNavigation()
   const fiber = runtime.ctx.plugin(ConversationController, {
     input: hub,
     blocks: new ComposerBlockRegistry(),
+    messageReveal,
+    detailsNavigation,
   })
   await fiber.await()
   const root = runtime.ctx.get('conversation') as ConversationController
   const scoped = runtime.sessions.scope('s1')!.get('conversation') as ConversationController
   const shell = hub.shellFor(runtime.sessions.binding('s1')!)
-  return { runtime, fiber, root, scoped, hub, shell, prompt, updateQueue, cancel, loadOlder }
+  return {
+    runtime, fiber, root, scoped, hub, shell, prompt, updateQueue, cancel, loadOlder,
+    messageReveal, detailsNavigation,
+  }
 }
 
 describe('ConversationController', () => {
+  it('opens the native Session and retains its durable message target', async () => {
+    const b = await bench()
+    const sessionId = b.runtime.sessions.behavior('s1').sessionId
+    b.root.revealMessage(sessionId, 7)
+    expect(b.runtime.sessions.list.getSnapshot().current).toBe(sessionId)
+    expect(b.messageReveal.read(sessionId)?.seq).toBe(7)
+    await b.runtime.dispose()
+  })
+
+  it('requests the pinned native details subpage without changing Session selection', async () => {
+    const b = await bench()
+    const sessionId = b.runtime.sessions.behavior('s1').sessionId
+    b.detailsNavigation.request(sessionId, 'tool')
+    b.root.openPinnedDetails(sessionId)
+    expect(b.detailsNavigation.snapshot(sessionId).page).toBe('pinned')
+    expect(b.runtime.sessions.list.getSnapshot().current).toBe(sessionId)
+    await b.runtime.dispose()
+  })
+
   it('routes operations through the public Session binding', async () => {
     const b = await bench()
     await b.scoped.send('hello')
@@ -140,6 +168,8 @@ describe('ConversationController', () => {
     await bare.plugin(ConversationController, {
       input: new InputHub(bare, makeTranslate(zh, {})),
       blocks: new ComposerBlockRegistry(),
+      messageReveal: new MessageRevealRegistry(),
+      detailsNavigation: new DetailsNavigation(),
     }).await()
     const orphan = bare.get('conversation') as ConversationController
     await expect(orphan.send('x')).rejects.toThrow(/sessions service unavailable/)

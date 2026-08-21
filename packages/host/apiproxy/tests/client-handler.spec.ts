@@ -88,6 +88,7 @@ function scriptedApi(overrides: {
       insertBefore: r => ok(r, { workspaceIds: [r.payload.workspaceId] }),
       insertSessionBefore: r => ok(r, { workspace: { workspaceId: 'w1' as never, path: '/t', title: 't', sessionIds: [], createdAt: '0', updatedAt: '0' } }),
       archiveSession: r => ok(r, { archivedSessionIds: [r.payload.sessionId] }),
+      unarchiveSession: r => ok(r, { archivedSessionIds: [] }),
     },
     skills: { list: r => ok(r, { skills: [] }), ...overrides.skills },
     agentPresets: {
@@ -205,7 +206,7 @@ describe('unary round trip', () => {
   })
 
   it('routes session fork with its optional cut anchor through the wire', async () => {
-    let seen: RpcRequest<{ sessionId: SessionId; atSeq?: number }> | undefined
+    let seen: RpcRequest<{ sessionId: SessionId; atSeq?: number; beforeSeq?: number }> | undefined
     const api = scriptedApi({
       sessions: {
         fork: (request) => {
@@ -217,6 +218,9 @@ describe('unary round trip', () => {
     const response = await client(api).sessions.fork({ sessionId: sid('s-parent'), atSeq: 7 })
     expect(seen?.payload).toEqual({ sessionId: 's-parent', atSeq: 7 })
     expect(response.result).toEqual({ ok: true, value: { sessionId: 's-child' } })
+
+    await client(api).sessions.fork({ sessionId: sid('s-parent'), beforeSeq: 4 })
+    expect(seen?.payload).toEqual({ sessionId: 's-parent', beforeSeq: 4 })
   })
 
   it('routes workspace rename, delete, and ordering through the wire', async () => {

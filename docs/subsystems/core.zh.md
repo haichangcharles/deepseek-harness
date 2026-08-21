@@ -19,6 +19,8 @@
 
 `scope/` 是这里唯一的非服务包：一个零依赖库（`createScope`/`scopeOf`/`scopeTarget`），在模块图中位于 `session/` 与 `system-prompt/` 之下，正是为了让它们消费它而不形成环。`agent-loop` 是公开 `Agent` 约定的唯一具体实现，放在这里因为它是 harness 的默认产品循环；它在 `ctx.agents.withInitiator()` 内运行每个 driver。扩展插件依赖 `agent`——包括需要发起 Agent 时——而绝不直接依赖 `agent-loop`，因此循环保持可替换。把这条主干接成可运行 agent 的默认组合是 [`examples/agent-spine-demo`](../../packages/examples/agent-spine-demo/README.md)。
 
+每次调用模型之前，`agent-loop` 都把持久历史选择委托给 [`dsh-context-compiler`](../../packages/context/context-compiler/README.md)。默认 provider 保持 Session 表层，扩展 provider 则可以选择不同的有序消息事件子集。循环在每个步骤只编译一次，把 provider descriptor 记录进 `request/header`，并在请求重试期间复用同一结果。
+
 <a id="creation-and-ownership"></a>
 
 ## 创建与所有权
@@ -729,6 +731,170 @@ roots(): Agent[]
 ```
 
 Source: [`packages/core/agent/src/index.ts:256`](../../packages/core/agent/src/index.ts)
+
+<a id="ctxcontextcompiler--contextcompilerregistry"></a>
+
+### `ctx.contextCompiler` — `ContextCompilerRegistry`
+
+Registry and validation boundary for request context compilers.
+
+```ts cordis-catalog
+/**
+ * Register one provider until the returned disposer is called.
+ * @param definition - Stable provider identity and pure selection function.
+ * @returns A disposer that removes this exact registration.
+ */
+register(definition: ContextCompilerDefinition): () => void
+
+/**
+ * Durably select a registered provider for one Session.
+ * @param session - Session whose future requests use the provider.
+ * @param id - Registered provider id to select.
+ * @returns The exact provider descriptor appended or already active.
+ */
+select(session: Session, id: string): ContextCompilerDescriptor
+
+/**
+ * Resolve the durable provider descriptor active for one Session.
+ * @param session - Session whose compiler selection should be folded.
+ * @returns The latest durable selection, or the built-in surface compiler.
+ */
+descriptor(session: Session): ContextCompilerDescriptor
+
+/**
+ * Compile the provider-selected durable Session events into messages.
+ * @param request - Session and loop coordinates supplied to the provider.
+ * @returns Frozen provider identity, event sequences, and derived messages.
+ */
+compile(request: ContextCompileRequest): ContextCompilation
+```
+
+Types: [Session](session.md)
+
+Source: [`packages/context/context-compiler/src/index.ts:140`](../../packages/context/context-compiler/src/index.ts)
+
+<a id="ctxcontextify--contextifyservice"></a>
+
+### `ctx.contextify` — `ContextifyService`
+
+Durable Context Plan mutations and native Session-family graph reads.
+
+```ts cordis-catalog
+/**
+ * Read the active Session's current Context Plan.
+ * @param agent - Live Agent whose Session owns the plan.
+ * @returns A detached plan and compilation summary.
+ */
+@Remote('get') get(agent: Agent): ContextifyView
+
+/**
+ * Read one bounded page of the active Session's native fork family.
+ * @param agent - Live Agent selecting the family root and active path.
+ * @param after - Zero-based node offset; omitted starts at the first node.
+ * @param limit - Maximum records from 1 through 500.
+ * @returns Family metadata, all edges, and the requested canonical node page.
+ */
+@Remote('familyPage') async familyPage(agent: Agent, after?: number, limit?: number): Promise<ContextFamilyGraphPage>
+
+/**
+ * Analyze one exact graph snapshot in manually selected Fast or Deep mode.
+ * @param agent - Live idle Agent whose route and native Session family are reviewed.
+ * @param base - Expected plan revision, graph watermark, and active Session identity.
+ * @param objective - Optional review objective; the latest user input is the fallback.
+ * @param mode - Fast bounded classifier (default) or isolated full-tree Harness child.
+ * @returns An ephemeral, validated proposal that has not mutated the Context Plan.
+ */
+@Remote('recommend') async recommend( agent: Agent, base: ContextRecommendationBase, objective?: string, mode?: ContextRecommendationMode, ): Promise<ContextRecommendationProposal>
+
+/**
+ * Cancel only the recommendation owned by this native Session family.
+ * @param agent - Live Agent identifying the family whose review is cancelled.
+ */
+@Remote('cancelRecommendation') cancelRecommendation(agent: Agent): void
+
+/**
+ * Validate a suggestion and return the exact native Host fork boundary.
+ * @param agent - Live idle Agent whose source Session owns the reviewed Turn.
+ * @param suggestionId - Durable suggestion identity returned by `get`.
+ * @returns The source Session and stable Turn start for native Host before-Turn fork.
+ */
+@Remote('prepareBranchSuggestion') prepareBranchSuggestion(agent: Agent, suggestionId: string): ContextBranchRelocationPreparation
+
+/**
+ * Set or clear one message's explicit context mode.
+ * @param agent - Live Agent whose Session receives durable events.
+ * @param ref - Expected current plan revision.
+ * @param node - Message location in one Session in the active family.
+ * @param mode - Natural behavior or the meaningful on-path/off-path override.
+ * @returns The view after the mutation commits.
+ */
+@Remote('setNodeMode') async setNodeMode( agent: Agent, ref: ContextPlanRef, node: ContextMessageRef, mode: 'natural' | 'include' | 'exclude', ): Promise<ContextifyView>
+
+/**
+ * Apply several node-mode changes as one Context Plan revision.
+ * @param agent - Live Agent whose Session receives durable events.
+ * @param ref - Expected current plan revision.
+ * @param mutations - Ordered message-mode replacements.
+ * @param expectedGraphRevision - Optional family revision required by recommendation acceptance.
+ * @returns The view after one complete plan commits.
+ */
+@Remote('setNodeModes') async setNodeModes( agent: Agent, ref: ContextPlanRef, mutations: readonly ContextNodeMutation[], expectedGraphRevision?: string, ): Promise<ContextifyView>
+
+/**
+ * Archive one node's model-visible semantics with a reversible role-preserving placeholder.
+ * @param agent - Live idle Agent whose Session receives the snapshot and plan events.
+ * @param ref - Expected current Context Plan revision.
+ * @param nodeRef - Native family message to retain structurally and replace semantically.
+ * @param reason - Human-visible reason retained with the replacement overlay.
+ * @param expectedGraphRevision - Optional family revision required by archive confirmation.
+ * @returns The committed v3 Contextify view.
+ */
+@Remote('archiveNode') async archiveNode( agent: Agent, ref: ContextPlanRef, nodeRef: ContextMessageRef, reason: string, expectedGraphRevision?: string, ): Promise<ContextifyView>
+
+/**
+ * Move one suggested completed Q&A into a deterministic native child Branch.
+ * @param agent - Live idle Agent whose source Session owns the reviewed Turn.
+ * @param suggestionId - Durable suggestion identity returned by `get`.
+ * @param childSessionId - Native Agent-backed child created from the prepared boundary.
+ * @returns The native child Session created by, or recovered for, this relocation.
+ */
+@Remote('acceptBranchSuggestion') async acceptBranchSuggestion( agent: Agent, suggestionId: string, childSessionId: SessionId, ): Promise<ContextBranchRelocationResult>
+
+/**
+ * Restore a node's original semantics while preserving Include/Exclude state.
+ * @param agent - Live idle Agent whose Session owns the replacement overlay.
+ * @param ref - Expected current Context Plan revision.
+ * @param nodeRef - Native family message whose replacement is removed.
+ * @returns The committed Contextify view with original semantics restored.
+ */
+@Remote('restoreNode') async restoreNode(agent: Agent, ref: ContextPlanRef, nodeRef: ContextMessageRef): Promise<ContextifyView>
+
+/**
+ * Reset every explicit choice to Natural behavior.
+ * @param agent - Live Agent whose plan changes.
+ * @param ref - Expected current plan revision.
+ * @returns The committed Natural view.
+ */
+@Remote('reset') reset(agent: Agent, ref: ContextPlanRef): ContextifyView
+
+/**
+ * Restore the prior Context Plan state as a new durable revision.
+ * @param agent - Live Agent whose plan changes.
+ * @param ref - Expected current plan revision.
+ * @returns The committed prior-state view.
+ */
+@Remote('undo') undo(agent: Agent, ref: ContextPlanRef): ContextifyView
+
+/**
+ * Restore the next Context Plan state as a new durable revision.
+ * @param agent - Live Agent whose plan changes.
+ * @param ref - Expected current plan revision.
+ * @returns The committed next-state view.
+ */
+@Remote('redo') redo(agent: Agent, ref: ContextPlanRef): ContextifyView
+```
+
+Source: [`packages/context/contextify/src/index.ts:183`](../../packages/context/contextify/src/index.ts)
 
 <a id="agent-events"></a>
 

@@ -21,6 +21,8 @@ import type { createChatStore } from '../stores.ts'
 import type { ComposerSubmitGesture, InputSubmitMode } from './composer-submission.ts'
 import type { ChatNode, ChatNodeKind } from './chat-nodes.ts'
 import type { CallId, SelectionTarget, ViewTab } from './views.ts'
+import type { MessageRevealBinding } from '../chat/message-reveal.ts'
+import type { DetailsPageSnapshot } from '../details-navigation.ts'
 
 /** Browser-owned image that has not crossed the durable host boundary. */
 export interface ComposerAttachment {
@@ -99,6 +101,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * only to return null; an all-declined chain renders nothing.
      */
     'conversation.chat.turnTail': { kind: 'chain'; scope: 'session'; owner: TurnTailOwnerProps }
+    /** Action strip attached to one durable user or admitted steering message. */
+    'conversation.chat.user-actions': {
+      kind: 'list'
+      scope: 'session'
+      owner: UserActionOwnerProps
+    }
     /**
      * Action strip attached to one finalized assistant message, rendered
      * inside that message's IconActions row. The chat entry owns the render
@@ -122,6 +130,22 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * instead; this one is the whole panel.
      */
     'conversation.details.tool': { kind: 'single'; scope: 'session'; owner: DetailsToolOwnerProps }
+    /**
+     * A feature-owned native Inspector rendered on the Details subpage.
+     * The provider owns selection and presentation; the conversation shell
+     * only supplies the stable right-column page host.
+     */
+    'conversation.details.inspector': {
+      kind: 'single'
+      scope: 'session'
+      owner: Record<string, never>
+    }
+    /**
+     * Additive, always-visible content in the conversation details column.
+     * Entries share the column with the transient Tool drawer instead of
+     * replacing it; each entry owns its own header and close affordance.
+     */
+    'conversation.details.pinned': { kind: 'list'; scope: 'session'; owner: Record<string, never> }
     /**
      * The composer takeover chain: entries are selector-routed replacements
      * of the default InputBar. Declared by this package's 'conversation'
@@ -338,6 +362,14 @@ export interface TurnTailOwnerProps {
 export interface AssistantActionOwnerProps {
   /** Stable identity carried from the `assistant/message` event. */
   messageId: MessageId
+  /** Local durable event sequence used by Context Map correlation. */
+  seq: number
+}
+
+/** Owner currency of one durable user-message action strip. */
+export interface UserActionOwnerProps {
+  /** Local durable event sequence used by Context Map correlation. */
+  seq: number
 }
 
 /** Hook constrained to business data published on the current Chat Node's Turn. */
@@ -436,6 +468,8 @@ export interface ConversationSessionInjected {
   releaseSessionImages: (sessionId: SessionId) => void
   /** Bind the input machine's draft persistence mirror to the session store. */
   bindDraftMirror: (write: (text: string) => void) => () => void
+  /** Pending graph-to-Chat target, retained while this Session or Chat view mounts. */
+  messageReveal?: MessageRevealBinding
 }
 
 /** Business callbacks injected into the strict session header seat. */
@@ -685,6 +719,8 @@ export interface ChatViewInjected {
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
   /** Hand a call off to the trajectory view: write the one-shot inspect target and switch tabs. */
   inspectCall: (callId: CallId) => void
+  /** One-shot durable message target owned by the conversation package. */
+  messageReveal: MessageRevealBinding
   /**
    * Per-session scroll memory surviving view switches (in-memory, never
    * persisted): the view saves on every scroll and restores on remount; a
@@ -719,11 +755,24 @@ export type ChatViewSlotProps =
 export interface DetailsInjected {
   /** Close the details panel (layout geometry stays with ctx.layout). */
   closeDetails: () => void
+  /** Select the additive pinned-content subpage without clearing Tool state. */
+  showPinnedDetails: () => void
+  /** Return to the selected Tool's native details subpage. */
+  showToolDetails: () => void
+  hooks: {
+    /** Live occupancy of the pinned area, including late plugin changes. */
+    pinnedDetails: ObservableSnapshot<boolean>
+    /** Session-local active right-column subpage. */
+    detailsPage: ObservableSnapshot<DetailsPageSnapshot>
+  }
 }
 
-/** Full details-slot props: selection store, Tool output seat, injected close callback, and locale. */
-export type DetailsSlotProps = PropsRuntime<'details'> & PropsRenderSlots<'conversation.details.tool'>
-  & PropsStore<ChatStore> & DetailsInjected & PropsLocale<'conversation'>
+/** Full details-slot props: selection store, pinned and Tool seats, injected layout callbacks, and locale. */
+export type DetailsSlotProps = PropsRuntime<'details'>
+  & PropsRenderSlots<
+    'conversation.details.inspector' | 'conversation.details.pinned' | 'conversation.details.tool'
+  >
+  & PropsStore<ChatStore> & InjectFace<DetailsInjected> & PropsLocale<'conversation'>
 
 /** Owner share common to the hero / New-Session Workspace pickers. */
 export interface EmptyWorkspaceOwnerProps {

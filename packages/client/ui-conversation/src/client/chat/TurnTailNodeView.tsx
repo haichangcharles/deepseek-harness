@@ -31,7 +31,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
   const messageId = closing.finalNode.messageId
   const assistantActions = messageId === undefined
     ? null
-    : renderSlot('conversation.chat.assistant-actions', { messageId })
+    : renderSlot('conversation.chat.assistant-actions', { messageId, seq: closing.finalNode.seq })
   return (
     <div className={css.root} data-turn-tail={data.turn} data-time-hover-root>
       {tail}
@@ -42,7 +42,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
         ttftMs={data.ttftMs}
         tokensPerSecond={data.tokensPerSecond}
         clock="end"
-        onBranch={() => { forkAt(closing.finalNode.seq) }}
+        onBranch={() => { forkAt(turn.end?.seq ?? data.seq) }}
         branchUnavailable={data.branchUnavailable || hasLaterChatNode}
         className={css.actions}
         extraActions={assistantActions}

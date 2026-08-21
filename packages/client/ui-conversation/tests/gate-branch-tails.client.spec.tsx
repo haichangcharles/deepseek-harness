@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import {
   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
@@ -42,7 +42,8 @@ const SessionProviderStub: SessionProviderComponent = ({ children }) => children
 
 /** Observe the owner currency without importing the Tool details renderer. */
 function renderToolDetailsProbe(owners?: DetailsToolOwnerProps[]): DetailsSlotProps['renderSlot'] {
-  return (_key, owner) => {
+  return (key, owner, options) => {
+    if (key === 'conversation.details.inspector') return options?.fallback
     owners?.push(owner as unknown as DetailsToolOwnerProps)
     return <div data-testid="tool-details-seat" />
   }
@@ -136,11 +137,94 @@ describe('render branch tails', () => {
         useStore={bindSnapshotSelector(chat)}
         actions={chat.actions}
         closeDetails={vi.fn()}
+        showPinnedDetails={vi.fn()}
+        showToolDetails={vi.fn()}
+        usePinnedDetails={select => select(false)}
+        useDetailsPage={select => select({ page: 'tool', revision: 0 })}
         t={t}
       />,
     )
     expect(view.getByText('详情')).toBeTruthy()
     expect(view.getByText('该调用不在当前窗口内')).toBeTruthy()
+  })
+
+  it('keeps the native Inspector mounted while manually switching right-sidebar pages', () => {
+    localStorage.clear()
+    const snap = snapshotBase()
+    const chat = createChatStore().create()
+    const closeDetails = vi.fn()
+    const emptyList = createSnapshotStore<SessionListState>(
+      { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined })
+    const emptyWorkspaces = createSnapshotStore<WorkspaceListState>({
+      items: [], archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
+      baselinesReady: true, recentWorkspaceId: undefined,
+    })
+    const renderSlot = ((key: string) => key === 'conversation.details.pinned'
+      ? <div>Context Map mock</div>
+      : key === 'conversation.details.inspector'
+        ? <div data-testid="trajectory-inspector-seat">Trajectory Inspector mock</div>
+        : <div data-testid="tool-details-seat" />) as DetailsSlotProps['renderSlot']
+    const detailsPage = createSnapshotStore<{ page: 'pinned' | 'tool'; revision: number }>({
+      page: 'pinned', revision: 0,
+    })
+    const requestPage = (page: 'pinned' | 'tool'): void => {
+      detailsPage.set({ page, revision: detailsPage.getSnapshot().revision + 1 })
+    }
+    const view = render(
+      <DetailsPanel
+        SessionProvider={SessionProviderStub}
+        renderSlot={renderSlot}
+        sessionId={SID}
+        useSession={bindSnapshotSelector({ getSnapshot: () => snap, subscribe: () => () => {} })}
+        useSessions={bindSnapshotSelector(emptyList)}
+        useWorkspaces={bindSnapshotSelector(emptyWorkspaces)}
+        useProjection={(() => undefined)}
+        useInput={(() => { throw new Error('unused') })}
+        inputActions={{
+          setDraft: () => {},
+          addImages: () => true,
+          removeImage: () => {},
+          pruneImages: () => {},
+          submit: () => {},
+        }}
+        useStore={bindSnapshotSelector(chat)}
+        actions={chat.actions}
+        closeDetails={closeDetails}
+        showPinnedDetails={() => { requestPage('pinned') }}
+        showToolDetails={() => { requestPage('tool') }}
+        usePinnedDetails={select => select(true)}
+        useDetailsPage={bindSnapshotSelector(detailsPage)}
+        t={t}
+      />,
+    )
+
+    expect(view.getByRole('tab', { name: 'Context Map' })).toBeTruthy()
+    expect((view.getByRole('tab', { name: '详情' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(view.getByText('Context Map mock')).toBeTruthy()
+    const inspectorSeat = view.getByTestId('trajectory-inspector-seat')
+    expect(inspectorSeat.closest('[hidden]')).not.toBeNull()
+
+    fireEvent.click(view.getByRole('tab', { name: '详情' }))
+    expect(view.queryByText('Context Map mock')).toBeNull()
+    expect(inspectorSeat.closest('[hidden]')).toBeNull()
+    expect(view.getByText('Trajectory Inspector mock')).toBeTruthy()
+    expect(chat.getSnapshot().selection).toBeNull()
+
+    fireEvent.click(view.getByRole('tab', { name: 'Context Map' }))
+    act(() => { chat.actions.select({ turnSeq: 1, callId: 'ghost' } satisfies SelectionTarget) })
+    fireEvent.click(view.getByRole('tab', { name: '详情' }))
+    expect(view.getByText('Trajectory Inspector mock')).toBeTruthy()
+    expect(chat.getSnapshot().selection).toEqual({ turnSeq: 1, callId: 'ghost' })
+
+    fireEvent.click(view.getByRole('tab', { name: 'Context Map' }))
+    expect(view.getByText('Context Map mock')).toBeTruthy()
+    expect(inspectorSeat.closest('[hidden]')).not.toBeNull()
+    expect(chat.getSnapshot().selection).toEqual({ turnSeq: 1, callId: 'ghost' })
+
+    fireEvent.click(view.getByRole('tab', { name: '详情' }))
+    expect(inspectorSeat.closest('[hidden]')).toBeNull()
+    expect(closeDetails).not.toHaveBeenCalled()
+    expect(chat.getSnapshot().selection).toEqual({ turnSeq: 1, callId: 'ghost' })
   })
 
   it('DetailsPanel resolves a nested run_code leaf to its full logged args and output', () => {
@@ -193,6 +277,10 @@ describe('render branch tails', () => {
         useStore={bindSnapshotSelector(chat)}
         actions={chat.actions}
         closeDetails={vi.fn()}
+        showPinnedDetails={vi.fn()}
+        showToolDetails={vi.fn()}
+        usePinnedDetails={select => select(false)}
+        useDetailsPage={select => select({ page: 'tool', revision: 0 })}
         t={t}
       />,
     )
